@@ -1,0 +1,193 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.4.
+--
+-- see: https://github.com/sol/hpack
+
+name:           Raft
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/Raft#readme>
+homepage:       https://github.com/githubuser/Raft#readme
+bug-reports:    https://github.com/githubuser/Raft/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2022 Author name here
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/Raft
+
+library
+  exposed-modules:
+      Generic.Api
+      Generic.Client
+      Generic.Common
+      Generic.Server
+      KV.Server
+      KVShard.Applier
+      KVShard.Client
+      KVShard.Server
+      KVShard.Types
+      Raft.API
+      Raft.App
+      Raft.Election
+      Raft.Impl
+      Raft.Replication
+      Raft.Types.Periodic
+      Raft.Types.Raft
+      Raft.Types.RaftLog
+      Raft.Util
+      ShardCtrl.Server
+      ShardCtrl.Types
+      Util
+  other-modules:
+      Paths_Raft
+  hs-source-dirs:
+      src
+  default-extensions:
+      DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
+  build-depends:
+      HUnit
+    , QuickCheck
+    , aeson
+    , array
+    , async
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , extra
+    , ghc-prim
+    , http-client
+    , http-conduit
+    , lens
+    , monad-par
+    , monad-par-extras
+    , mtl
+    , pqueue
+    , random
+    , servant
+    , servant-client
+    , servant-client-core
+    , servant-server
+    , stm
+    , tasty
+    , tasty-hunit
+    , text
+    , time
+    , transformers
+    , unliftio
+    , unordered-containers
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010
+
+executable Raft-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_Raft
+  hs-source-dirs:
+      app
+  default-extensions:
+      DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      HUnit
+    , QuickCheck
+    , Raft
+    , aeson
+    , array
+    , async
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , extra
+    , ghc-prim
+    , http-client
+    , http-conduit
+    , lens
+    , monad-par
+    , monad-par-extras
+    , mtl
+    , pqueue
+    , random
+    , servant
+    , servant-client
+    , servant-client-core
+    , servant-server
+    , stm
+    , tasty
+    , tasty-hunit
+    , text
+    , time
+    , transformers
+    , unliftio
+    , unordered-containers
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010
+
+test-suite Raft-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      KVTests.Linearizable
+      KVTests.Main
+      KVTests.Test
+      KVTests.Util
+      RaftTests.Core
+      RaftTests.Main
+      RaftTests.Types
+      ShardCtrlTests.Main
+      ShardKVTests.Main
+      Utilities.Environment
+      Utilities.Network
+      Paths_Raft
+  hs-source-dirs:
+      test
+  default-extensions:
+      DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      HUnit
+    , QuickCheck
+    , Raft
+    , aeson
+    , array
+    , async
+    , base >=4.7 && <5
+    , bytestring
+    , containers
+    , extra
+    , ghc-prim
+    , http-client
+    , http-conduit
+    , lens
+    , monad-par
+    , monad-par-extras
+    , mtl
+    , pqueue
+    , random
+    , servant
+    , servant-client
+    , servant-client-core
+    , servant-server
+    , stm
+    , tasty
+    , tasty-hunit
+    , text
+    , time
+    , transformers
+    , unliftio
+    , unordered-containers
+    , vector
+    , wai
+    , warp
+  default-language: Haskell2010

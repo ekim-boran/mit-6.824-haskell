@@ -1,0 +1,81 @@
+name:                Raft
+version:             0.1.0.0
+github:              "githubuser/Raft"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2022 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/Raft#readme>
+
+default-extensions:  DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
+
+dependencies:
+- base >= 4.7 && < 5
+- QuickCheck
+- async
+- bytestring
+- text
+- containers
+- transformers
+- mtl 
+- http-client
+- http-conduit
+- stm
+- servant
+- servant-client
+- servant-server
+- servant-client-core
+- time
+- aeson
+- warp
+- wai
+- HUnit
+- lens
+- unliftio
+- random
+- unordered-containers
+- vector
+- extra
+- ghc-prim
+- pqueue
+- array
+- tasty
+- tasty-hunit
+- monad-par
+- monad-par-extras
+library:
+  source-dirs: src
+
+executables:
+  Raft-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Raft
+
+tests:
+  Raft-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Raft
