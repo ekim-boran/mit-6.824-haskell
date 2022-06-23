@@ -62,7 +62,9 @@ update = (void . forever . runExceptT) $ do
       flip mapConcurrently_ (getServersByShardIds shardIds old) $
         \((targetGid, servers), shards) -> runExceptT $ do
           response <- ExceptT $ serverCall (getShards ((GetShardRequest (coerce (configId new)) shards))) servers
-          serverCommit (KVArgs (coerce gid * coerce targetGid) (coerce (configId new)) (OpGetShards response)) -- fix it multiplied to avoid duplicate detection
+          -- liftIO $ print $ "1me :" ++ show gid ++ " target: " ++ show targetGid ++ " shards: " ++ show shards ++ " configs: old " ++ show (configId old) ++ " new" ++ show (configId new)
+          serverCommit (KVArgs (coerce gid * 7 + coerce targetGid * 11) (coerce (configId new)) (OpGetShards response)) -- fix it multiplied to avoid duplicate detection
+          -- liftIO $ print $ "2me :" ++ show gid ++  " target: " ++ show targetGid ++ " shards: " ++ show shards ++ " configs: old " ++ show (configId old) ++ " new" ++ show (configId new) ++ " response" ++ show a
           lift $ async $ serverCall (deleteShards ((DeleteShardsRequest (coerce (gid)) (coerce (configId old)) shards))) servers
 
 kvserver args@KVArgs {..} = do

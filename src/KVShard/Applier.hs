@@ -112,7 +112,7 @@ ignoreDuplicates s@(ShardServerState {..}) args = do
 checkSnapshot :: Int ->   ShardServerState -> MaybeT STM ProcessResult
 checkSnapshot size   server@(ShardServerState {..}) = do
   index <-  lift $ modifyTVar2 lastAppliedLen (+ 1)
-  guard (size > 500)
+  guard (size > 1)
   items' <- lift $ readTVar items
   lp <- lift $ readTVar (lastProcessed) >>= traverse (readTVar)
   state <- lift $ readTVar state

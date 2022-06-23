@@ -6,7 +6,7 @@ import Servant.Client
 import Util
 
 newtype MsgId = MsgId Int
-  deriving newtype (Show, FromJSON, ToJSON, Eq, Ord, Num)
+  deriving newtype (Show, FromJSON, ToJSON, Eq, Ord, Num, Integral, Real, Enum)
   deriving (Generic)
 
 data KVArgs a = KVArgs

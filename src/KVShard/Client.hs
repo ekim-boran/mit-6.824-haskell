@@ -39,8 +39,8 @@ clientCall op = do
   let retryAction = fmap (getServersByKey (key op)) updateConfig
   response <- call (retryAction) (kv msg) servers
   case response of
-    (Right x) -> return x -- trace ("<->" ++ show (msgId msg)) $
-    (Left _) -> return []
+    (Right x) -> (when ((fromIntegral (msgId msg)) `mod` 100 == 0) $ liftIO $ print $ show msg) >> return x --
+    (Left _) -> (when ((fromIntegral (msgId msg)) `mod` 100 == 0) $ liftIO $ print $ show msg) >> return []
 
 call retryAction msg = go
   where

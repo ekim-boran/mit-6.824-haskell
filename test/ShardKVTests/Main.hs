@@ -28,7 +28,7 @@ ctrlServerIds = [0 .. 2]
 
 ctrlClient = 3
 
-groupIds = [50, 51, 52, 53, 54]
+groupIds = [150, 151, 152, 153, 154]
 
 makeTestClient network nodeId = do
   persister <- newTestPersister
@@ -52,7 +52,7 @@ makeTestServer network (gid, servers, nodeId) = do
 
 randGroups :: MonadIO m => m [GroupId]
 randGroups = do
-  l <- randomRIO (0, length groupIds - 1)
+  l <- randomRIO (1, length groupIds)
   xs <- replicateM l (randomRIO (minimum groupIds :: Int, maximum groupIds))
   return $ coerce $ nub xs
 
@@ -88,7 +88,7 @@ test2 nactions nkeys shardClients = do
   actions <- testActions (nactions * (length shardClients)) nkeys
   logs <- flip mapConcurrently (zip shardClients (chunksOf nactions actions)) $ \(x, chunk) -> runTestClient x (traverse execute1 chunk)
   check (concat logs)
-  print (length (concat logs) )
+  print (length (concat logs))
   return ()
 
 f servers ctrlClient = do
@@ -126,5 +126,5 @@ checkStateSize size xs = void $ do
   if s > 40000 then error $ "snapshot is not working correctly" ++ show s else checkStateSize (max s size) xs
 
 testSimpleA = forM_ [1 .. 1] $ \i -> do
-  genericTest 20 3 (test2 1000 50) f
+  genericTest 20 7 (test2 500 50) f
   print $ "------------------ finished test: " ++ show i ++ " -------------------------"
