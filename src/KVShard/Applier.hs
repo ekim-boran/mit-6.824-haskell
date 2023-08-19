@@ -5,18 +5,18 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Generic.Common
 import KVShard.Types
-import Raft.App
+import Raft.Lib
 import Raft.Types.Raft
 import ShardCtrl.Types
 import Util
-  
 
-getVersion key items = withTVar items (fst . (M.! (key2shard key)))
+
+getVersion key items = withTVar items (fst . (M.! key2shard key))
 
 checkShard (OpClient op version) items state = do
   current <- lift $ getVersion (key op) items -- || current /= version || cid /= version
   cid <- lift $ withTVar state latestConfig -- || cid /= version
-  if version == 0 || current /= cid then throwError ReplyWrongGroup else return ()
+  when (version == 0 || current /= cid) $ throwError ReplyWrongGroup
 checkShard _ items state = return ()
 
 data ProcessResult = NewSnapshot Int T.Text | InstallSnapshot ApplySnapshot
@@ -26,23 +26,21 @@ applier = do
   forever $ do
     server <- ask
     size <- getStateLength
-    me <- me
-    result <- atomically $ (readTChan ch >>=  process size server )
+    result <- atomically (readTChan ch >>=  process size server )
     case result of
       Just (NewSnapshot i bytes) ->  snapshot i bytes
       Just (InstallSnapshot args) -> installSnapshot server args
       _ -> return ()
 
 installSnapshot :: RaftContext m => ShardServerState -> ApplySnapshot -> m ()
-installSnapshot server@(ShardServerState {..}) args@(ApplyS bytes term len) = do
-  whenM ((condInstallSnapshot term len bytes)) $ do
-    case decodeText bytes of
-      Nothing -> error "corrupted state"
-      (Just (items', lastProcessed', state')) -> (void . atomically) $ do
-        writeTVar (lastAppliedLen) len
-        writeTVar items items'
-        writeTVar state state'
-        M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> writeTVar (tvar) value) lastProcessed'
+installSnapshot server@(ShardServerState {..}) args@(ApplyS bytes term len) =
+  whenM (condInstallSnapshot term len bytes) $ case decodeText bytes of
+  Nothing -> error "corrupted state"
+  (Just (items', lastProcessed', state')) -> (void . atomically) $ do
+    writeTVar (lastAppliedLen) len
+    writeTVar items items'
+    writeTVar state state'
+    M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> writeTVar (tvar) value) lastProcessed'
 
 -------------------------------------
 
@@ -61,13 +59,13 @@ processConfig :: ShardServerState -> Config -> STM ()
 processConfig s@(ShardServerState {..}) newConfig = do
   state' <- readTVar state
   case state' of
-    Active activeConfig -> do writeTVar state (InTransition activeConfig newConfig)
+    Active activeConfig -> writeTVar state (InTransition activeConfig newConfig)
     InTransition activeConfig _ -> error "cannot happend"
 
 processShards :: ShardServerState -> GetShardReply -> STM ()
 processShards s@(ShardServerState {..}) (GetShardReply {..}) = do
   modifyTVar items (M.union replyItems)
-  void $ M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> modifyTVar tvar ((max value))) replyLastProcessed
+  void $ M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> modifyTVar tvar (max value)) replyLastProcessed
 
 checkTransitionToNewConfig :: ShardServerState -> STM ()
 checkTransitionToNewConfig s@(ShardServerState {..}) = do
@@ -77,33 +75,32 @@ checkTransitionToNewConfig s@(ShardServerState {..}) = do
       let newShards = getShardsByGroup gid newConfig
       modifyTVar items (M.mapWithKey (\k (v, m) -> if v == configId oldConfig && k `S.member` newShards then (configId newConfig, m) else (v, m))) -- increase versions of my same shards
       oldShards <- oldShards s newConfig
-      when (null oldShards) $ writeTVar state (Active newConfig)  
+      when (null oldShards) $ writeTVar state (Active newConfig)
     _ -> return ()
 
-processDeleteShards s@(ShardServerState {..}) cid shardIds = do
-    modifyTVar items (M.mapWithKey  (\key x@(cid', value) -> if  cid == cid' && key `elem` shardIds then (-1, M.empty) else x ))
- 
+processDeleteShards s@(ShardServerState {..}) cid shardIds = modifyTVar items (M.mapWithKey  (\key x@(cid', value) -> if  cid == cid' && key `elem` shardIds then (-1, M.empty) else x ))
+
 process :: Int -> ShardServerState -> ApplyMsg -> STM (Maybe ProcessResult)
-process size s@(ShardServerState {..}) (ApplyCommand (k@ApplyC {..})) = do
+process size s@(ShardServerState {..}) (ApplyCommand k@ApplyC {..}) = do
     runMaybeT $ do
       payload <- ignoreDuplicates s applyCommand
       lift $ case payload of
         (OpClient k i) -> processCommand s k
         (OpNewConfig c) -> processConfig s c >> checkTransitionToNewConfig s
         (OpGetShards c) -> processShards s c >> checkTransitionToNewConfig s
-        (OpDeleteShards cid shardIds) -> processDeleteShards s cid shardIds 
+        (OpDeleteShards cid shardIds) -> processDeleteShards s cid shardIds
         _ -> return ()
 
     runMaybeT $ checkSnapshot size s
-process size (ShardServerState {..}) (ApplySnapshot (arg@ApplyS {..})) = do
+process size (ShardServerState {..}) (ApplySnapshot arg@ApplyS {..}) = do
   index <- readTVar lastAppliedLen
-  if (applysnapshotLen >= index) then return (Just $ InstallSnapshot arg) else return $ Nothing
+  if applysnapshotLen >= index then return (Just $ InstallSnapshot arg) else return Nothing
 
 ignoreDuplicates :: ShardServerState -> T.Text -> MaybeT STM ShardKVOp
 ignoreDuplicates s@(ShardServerState {..}) args = do
   (KVArgs {..}) <- MaybeT $ pure $ decodeText args
   exceptToMaybeT $ checkShard payload items state
-  lp <- lift $ getOrInsert clientId (lastProcessed)
+  lp <- lift $ getOrInsert clientId lastProcessed
   lastMsgId <- lift $ readTVar lp
   guard (msgId > lastMsgId)
   lift $ writeTVar lp msgId
@@ -114,6 +111,6 @@ checkSnapshot size   server@(ShardServerState {..}) = do
   index <-  lift $ modifyTVar2 lastAppliedLen (+ 1)
   guard (size > 1)
   items' <- lift $ readTVar items
-  lp <- lift $ readTVar (lastProcessed) >>= traverse (readTVar)
+  lp <- lift $ readTVar lastProcessed >>= traverse readTVar
   state <- lift $ readTVar state
   return (NewSnapshot index (encodeText (items', lp, state)))

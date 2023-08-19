@@ -26,8 +26,8 @@ x = decode $ encode $ OpPut "3" "3"
 
 type ShardKVAPI =
   "kv" :> ReqBody '[JSON] (KVArgs KVOp) :> Get '[JSON] (KVReply [T.Text])
-    :<|> "getShards" :> ReqBody '[JSON] (GetShardRequest) :> Get '[JSON] (KVReply GetShardReply)
-    :<|> "deleteShards" :> ReqBody '[JSON] (DeleteShardsRequest) :> Get '[JSON] (KVReply ())
+    :<|> "getShards" :> ReqBody '[JSON] GetShardRequest :> Get '[JSON] (KVReply GetShardReply)
+    :<|> "deleteShards" :> ReqBody '[JSON] DeleteShardsRequest :> Get '[JSON] (KVReply ())
 
 data GetShardRequest = GetShardRequest ConfigId [ShardId]
   deriving (Show, Generic, FromJSON, ToJSON)
@@ -36,8 +36,8 @@ data DeleteShardsRequest = DeleteShardsRequest GroupId ConfigId [ShardId]
   deriving (Show, Generic, FromJSON, ToJSON)
 
 data GetShardReply = GetShardReply
-  { replyItems :: (M.Map ShardId (ConfigId, M.Map T.Text [T.Text])),
-    replyLastProcessed :: M.Map NodeId (MsgId)
+  { replyItems :: M.Map ShardId (ConfigId, M.Map T.Text [T.Text]),
+    replyLastProcessed :: M.Map NodeId MsgId
   }
   deriving (Show, Generic, FromJSON, ToJSON)
 
@@ -49,8 +49,8 @@ data ShardKVOp
   | OpEmpty
   deriving (Show, Generic, FromJSON, ToJSON)
 
-shardKVApi :: Proxy (ShardKVAPI)
-shardKVApi = (Servant.Proxy @(ShardKVAPI))
+shardKVApi :: Proxy ShardKVAPI
+shardKVApi = Servant.Proxy @ShardKVAPI
 
 kv :<|> getShards :<|> deleteShards = client shardKVApi
 
@@ -68,7 +68,7 @@ data ShardServerState = ShardServerState
 emptyItems = M.fromList [(sid, (0, M.empty)) | sid <- [0 .. 9]]
 
 makeShardServerState gid = do
-  items <- newTVarIO $ emptyItems
+  items <- newTVarIO emptyItems
   lp <- newTVarIO M.empty
   la <- newTVarIO 0
   c <- newIORef (return ())
@@ -77,7 +77,7 @@ makeShardServerState gid = do
 
 oldShards s@(ShardServerState {..}) newConfig = do
   let shards = getShardsByGroup gid newConfig
-  withTVar items (M.keys . M.filterWithKey (\sid (v, _) -> sid `S.member` shards && v /= (configId newConfig)))
+  withTVar items (M.keys . M.filterWithKey (\sid (v, _) -> sid `S.member` shards && v /= configId newConfig))
 
 activeConfig (InTransition old _) = configId old
 activeConfig (Active active) = configId active
@@ -92,6 +92,6 @@ getOrInsert clientId lastProcessed = do
   case M.lookup clientId map of
     Nothing -> do
       elem <- newTVar (MsgId (-1))
-      writeTVar lastProcessed $ M.insert clientId (elem) map
+      writeTVar lastProcessed $ M.insert clientId elem map
       return elem
     (Just x) -> return x

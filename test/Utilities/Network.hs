@@ -8,11 +8,24 @@ import Network.HTTP.Client hiding (port)
 import Servant.Client
 import Util
 
+type TestEnvironment = (NodeId, TestNetwork)
+
+newtype TestEnvironmentT m a = TestEnvironmentT {unTest :: ReaderT (NodeId, TestNetwork) m a}
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, MonadReader (NodeId, TestNetwork), MonadFail)
+
+runNetwork a = runReaderT (unTest a)
+
+instance (Monad m, MonadIO m) => HasEnvironment (TestEnvironmentT m) where
+  sendRPC peer rpcType f = do
+    (me, network) <- ask
+    liftIO $ networkRPC me peer rpcType f network
+  me = asks fst
+
 data TestNetwork = TestNetwork
   { manager :: Manager,
     disNodes :: IORef (S.Set NodeId),
     config :: IORef NetworkConfiguration,
-    partitions :: IORef ([IS.IntSet]),
+    partitions :: IORef [IS.IntSet],
     rpcCount :: IORef Int
   }
 
@@ -22,21 +35,22 @@ data NetworkConfiguration = NetworkConfiguration
     longReordering :: Bool
   }
 
+networkRPC :: NodeId -> NodeId -> RPCType -> ClientM a -> TestNetwork -> IO (Maybe a)
 networkRPC from to rpcType f net@(TestNetwork {..}) = do
   config@(NetworkConfiguration {..}) <- atomicModifyIORef config (\n -> (n, n))
-  liftIO $ atomicModifyIORef_ (rpcCount) (+ 1)
+  liftIO $ atomicModifyIORef_ rpcCount (+ 1)
   d <- checkConnection from to net
   if d
-    then if longDelays then randomDelay (7000) >> return Nothing else randomDelay (100) >> return Nothing
+    then if longDelays then randomDelay 7000 >> return Nothing else randomDelay 100 >> return Nothing
     else do
       r <- runMaybeT $ do
-        when (not reliable) $ randomDelay 27 >> withProb2 10 empty -- short delay &&  drop request
+        unless reliable $ randomDelay 27 >> withProb2 10 empty -- short delay &&  drop request
         r <- MaybeT $ liftIO $ toMaybe <$> runClientM f (mkClientEnv manager (BaseUrl Http "localhost" (nodeId to + port rpcType) ""))
-        when (not reliable) $ withProb2 10 empty --  drop response
+        unless reliable $ withProb2 10 empty --  drop response
         return r
       case r of
-        Nothing -> when longDelays $ randomDelay (3000)
-        (Just x) -> when longReordering $ withProb2 (66) (randomDelay 1000)
+        Nothing -> when longDelays $ randomDelay 3000
+        (Just x) -> when longReordering $ withProb2 66 (randomDelay 1000)
       return r
 
 makeNetwork reliable = do
@@ -51,8 +65,8 @@ checkConnection from to net@(TestNetwork {..}) = do
   disconnectedNodes <- atomicModifyIORef disNodes (\n -> (n, n))
   let disconnected = S.member from disconnectedNodes || S.member to disconnectedNodes
   xs <- Util.readIORef partitions
-  let members = [i | a <- [from, to], (i, s) <- zip [0 ..] xs, (fromIntegral a) `IS.member` s]
-  let r = (length members == 2 && (members !! 0) /= (members !! 1)) || disconnected
+  let members = [i | a <- [from, to], (i, s) <- zip [0 ..] xs, fromIntegral a `IS.member` s]
+  let r = length members == 2 && members !! 0 /= members !! 1 || disconnected
   return r
 
 disconnect i n = atomicModifyIORef' (disNodes n) (\s -> (S.insert i s, ()))
@@ -67,6 +81,6 @@ changeReliable b n = atomicModifyIORef' (config n) (\c -> (c {reliable = b}, ())
 
 changeLongReordering b n = atomicModifyIORef' (config n) (\c -> (c {longReordering = b}, ()))
 
-partitionNetwork xs n = atomicModifyIORef' (partitions n) (\_ -> (fmap (IS.fromList . fmap (fromIntegral)) xs, ()))
+partitionNetwork xs n = atomicModifyIORef' (partitions n) (const (fmap (IS.fromList . fmap fromIntegral) xs, ()))
 
-removePartitions n = atomicModifyIORef' (partitions n) (\_ -> ([], ()))
+removePartitions n = atomicModifyIORef' (partitions n) (const ([], ()))

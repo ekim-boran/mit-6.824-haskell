@@ -9,21 +9,21 @@ import Data.Text qualified as T
 import Generic.Api
 import Generic.Common
 import Network.Wai.Handler.Warp hiding (getPort)
-import Raft.App
+import Raft.Lib
 import Raft.Types.Raft
 import Util
 
 data KVServerState state = KVServerState
-  { items :: TVar (state),
+  { items :: TVar state,
     lastProcessed :: TVar (M.Map NodeId (TVar MsgId)),
     lastAppliedLen :: TVar Int,
     cancelAction :: IORef (IO ())
   }
 
 newtype KVServerT r m a = KVServerT {unKVServer :: ReaderT (KVServerState r) (RaftT m) a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader ((KVServerState r)), MonadIO, MonadUnliftIO, RaftContext, HasEnvironment)
+  deriving newtype (Functor, Applicative, Monad, MonadReader (KVServerState r), MonadIO, MonadUnliftIO, RaftContext, HasEnvironment)
 
-runKVServerT action state = runReaderT (unKVServer action) state
+runKVServerT action = runReaderT (unKVServer action)
 
 makeKVServerState = do
   items <- newTVarIO newState
@@ -36,16 +36,17 @@ stop = do
   s@KVServerState {..} <- ask
   stopRaft
   readIORef cancelAction >>= liftIO
-  atomically $ writeTVar items newState >> writeTVar lastAppliedLen 0 >> writeTVar lastProcessed (M.empty)
+  atomically $ writeTVar items newState >> writeTVar lastAppliedLen 0 >> writeTVar lastProcessed M.empty
   return ()
 
 start = do
   s@KVServerState {..} <- ask
-  tasks <- async $ race applier (apiServer KVRPC api server)
+  me' <- me
+  tasks <- async $ race applier (apiServer me' KVRPC api server)
   startRaft
   writeIORef cancelAction (Util.cancel tasks)
 
-waitChange tvar value = Util.timeout (1000000) . atomically $ do
+waitChange tvar value = Util.timeout 1000000 . atomically $ do
   newLastMsgId <- readTVar tvar
   if value == newLastMsgId then retry else return newLastMsgId
 
@@ -54,7 +55,7 @@ getOrInsert clientId lastProcessed = do
   case M.lookup clientId map of
     Nothing -> do
       elem <- newTVar (MsgId (-1))
-      writeTVar lastProcessed $ M.insert clientId (elem) map
+      writeTVar lastProcessed $ M.insert clientId elem map
       return elem
     (Just x) -> return x
 
@@ -63,21 +64,20 @@ getTerm = MaybeT $ do
   if isLeader then return $ Just term else return Nothing
 
 serverCommit args@KVArgs {..} = do
-  tvar <- asks lastProcessed >>= (atomically . getOrInsert clientId)
+  tvar <- asks lastProcessed >>= atomically . getOrInsert clientId
   lastMsgId <- readTVarIO tvar
-  startTerm <- if msgId > lastMsgId then snd <$> (MaybeT $ commit (encodeText args)) else getTerm
+  startTerm <- if msgId > lastMsgId then snd <$> MaybeT (commit (encodeText args)) else getTerm
   waitMsgId tvar startTerm lastMsgId
   where
-    waitMsgId tvar startTerm lastMsgId = do
-      guardM (fmap (== startTerm) getTerm) $
-        when (msgId > lastMsgId) $ do
-          new <- MaybeT $ waitChange tvar lastMsgId
-          waitMsgId tvar startTerm new
+    waitMsgId tvar startTerm lastMsgId = guardM (fmap (== startTerm) getTerm) $
+      when (msgId > lastMsgId) $ do
+        new <- MaybeT $ waitChange tvar lastMsgId
+        waitMsgId tvar startTerm new
 
 server args@KVArgs {..} =
   runExceptT $ do
     maybeToExceptT ReplyWrongLeader $ serverCommit args
-    maybeToExceptT ReplyNoKey $ MaybeT (asks items >>= (fmap (getKV (payload)) . readTVarIO))
+    maybeToExceptT ReplyNoKey $ MaybeT (asks items >>= fmap (getKV payload) . readTVarIO)
 
 data ProcessResult = NewSnapshot Int T.Text | InstallSnapshot ApplySnapshot deriving (Show)
 
@@ -87,32 +87,30 @@ ignoreDuplicates server args = do
   lastMsgId <- lift $ readTVar lp
   guard (msgId > lastMsgId)
   lift $ writeTVar lp msgId
-  return (payload)
+  return payload
 
 checkSnapshot size server@(KVServerState {..}) = do
   index <- lift $ modifyTVar2 lastAppliedLen (+ 1)
   guard (size > 1000)
   items' <- lift $ readTVar items
-  lp <- lift $ readTVar (lastProcessed) >>= traverse (readTVar)
+  lp <- lift $ readTVar lastProcessed >>= traverse readTVar
   return $ NewSnapshot index (encodeText (items', lp))
 
-process size server@(KVServerState {..}) (ApplyCommand (k@ApplyC {..})) =
+process size server@(KVServerState {..}) (ApplyCommand k@ApplyC {..}) =
   runMaybeT $ do
     payload <- ignoreDuplicates server applyCommand
     lift $ modifyTVar items (putKV payload)
     checkSnapshot size server
-process size server@(KVServerState {..}) (ApplySnapshot (arg@ApplyS {..})) = do
+process size server@(KVServerState {..}) (ApplySnapshot arg@ApplyS {..}) = do
   index <- readTVar lastAppliedLen
-  if (applysnapshotLen >= index) then return (Just $ InstallSnapshot arg) else return $ Nothing
+  if applysnapshotLen >= index then return (Just $ InstallSnapshot arg) else return Nothing
 
-installSnapshot server@(KVServerState {..}) args@(ApplyS bytes term len) = do
-  whenM ((condInstallSnapshot term len bytes)) $ do
-    case decodeText bytes of
-      Nothing -> error "corrupted state"
-      (Just (items', lastProcessed')) -> (void . atomically) $ do
-        writeTVar (lastAppliedLen) len
-        writeTVar items items'
-        M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> writeTVar (tvar) value) lastProcessed'
+installSnapshot server@(KVServerState {..}) args@(ApplyS bytes term len) = whenM (condInstallSnapshot term len bytes) $ case decodeText bytes of
+  Nothing -> error "corrupted state"
+  (Just (items', lastProcessed')) -> (void . atomically) $ do
+    writeTVar (lastAppliedLen) len
+    writeTVar items items'
+    M.traverseWithKey (\key value -> getOrInsert key lastProcessed >>= \tvar -> writeTVar (tvar) value) lastProcessed'
 
 applier = forever $ do
   server <- ask
@@ -121,5 +119,5 @@ applier = forever $ do
   result <- atomically $ readTChan ch >>= process size server
   case result of
     Nothing -> return ()
-    Just (NewSnapshot i bytes) -> (snapshot i bytes)
+    Just (NewSnapshot i bytes) -> snapshot i bytes
     Just (InstallSnapshot args) -> installSnapshot server args

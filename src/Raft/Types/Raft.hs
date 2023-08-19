@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import GHC.Base
 import Raft.Types.Periodic
 import Raft.Types.RaftLog
+import Servant.Client (ClientM)
 import Util
 
 data ApplyCommand = ApplyC
@@ -47,22 +48,16 @@ data RaftState = RaftState
     lastVote :: Maybe NodeId,
     nextIndex :: M.Map NodeId Int, -- for each server, index of the next log entry to send to that server (initialized to next slot)
     ackedLen :: M.Map NodeId Int, -- for each server, index of highest log entry	 known to be replicated on server	 (initialized to 0, increases monotonically
-    raftLog :: RaftLog
+    raftLog :: RaftLog,
+    snap :: T.Text
   }
 
-emptyState servers = RaftState Follower (Term 0) Nothing (makeMap servers 0) (makeMap servers 0) makeLog
+emptyState servers = RaftState Follower (Term 0) Nothing (makeMap servers 0) (makeMap servers 0) makeLog T.empty
 
 vote :: Role -> Term -> Maybe NodeId -> RaftState -> RaftState
 vote newRole newTerm lastVote r = r {role = newRole, lastVote = lastVote, term = newTerm}
 
-majority :: Raft -> Int
-majority (Raft {..}) = ((length servers `div` 2) + 1)
-
-clearState r@(Raft {..}) = do
-  runMaybeT $ forever $ MaybeT (atomically $ tryReadTChan applyCh)
-  atomically $ writeTVar committedLen 0 >> writeTVar appliedLen 0
-  modifyMVar_ raftState (\_ -> return $ emptyState servers)
-
+makeRaft :: MonadIO m => [NodeId] -> m Raft
 makeRaft servers = do
   commitLen <- newTVarIO 0
   appliedLen <- newTVarIO 0

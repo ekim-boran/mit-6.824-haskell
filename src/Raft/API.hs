@@ -60,12 +60,14 @@ type RaftAPI =
     :<|> "appendEntries" :> ReqBody '[JSON] AppendEntriesArgs :> Get '[JSON] AppendEntriesReply
     :<|> "installSnapshot" :> ReqBody '[JSON] InstallSnapshotArgs :> Get '[JSON] InstallSnapshotReply
 
-raftApi = (Servant.Proxy @RaftAPI)
+raftApi = Servant.Proxy @RaftAPI
 
 requestVote :<|> appendEntries :<|> installSnapshot = client raftApi
 
-requestVoteRPC msg peer = sendRPC RaftRPC peer (requestVote msg)
+requestVoteRPC msg peer = sendRPC peer RaftRPC (requestVote msg)
 
-appendEntriesRPC msg peer = sendRPC RaftRPC peer (appendEntries msg)
+appendEntriesRPC msg peer = sendRPC peer RaftRPC (appendEntries msg)
 
-installSnapshotRPC msg peer = sendRPC RaftRPC peer (installSnapshot msg)
+installSnapshotRPC msg peer = sendRPC peer RaftRPC (installSnapshot msg)
+
+ 

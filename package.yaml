@@ -19,7 +19,7 @@ extra-source-files:
 # common to point users to the README.md file.
 description:         Please see the README on GitHub at <https://github.com/githubuser/Raft#readme>
 
-default-extensions:  DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
+default-extensions:   DataKinds, RecordWildCards,  ExistentialQuantification,  GHC2021,ImportQualifiedPost, BangPatterns, NamedFieldPuns, ScopedTypeVariables, NoMonomorphismRestriction,DerivingStrategies, OverloadedStrings, DeriveAnyClass, TypeFamilies
 
 dependencies:
 - base >= 4.7 && < 5
@@ -55,6 +55,7 @@ dependencies:
 - tasty-hunit
 - monad-par
 - monad-par-extras
+- filepath
 library:
   source-dirs: src
 
@@ -68,7 +69,15 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - Raft
-
+  Raft2-exe:
+    main:                Main.hs
+    source-dirs:         app2
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Raft
 tests:
   Raft-test:
     main:                Spec.hs

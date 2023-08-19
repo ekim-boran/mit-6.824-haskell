@@ -40,8 +40,8 @@ data LogTermResult
   | OutOfBounds Int -- log length
 
 logTermAt n l@(RaftLog {..})
-  | n == snapshotLen - 1 = Ok $ snapshotTerm
-  | n < snapshotLen = (InSnapshot (snapshotLen, snapshotTerm))
+  | n == snapshotLen - 1 = Ok snapshotTerm
+  | n < snapshotLen = InSnapshot (snapshotLen, snapshotTerm)
   | otherwise = case S.lookup (n - snapshotLen) entries of
       Nothing -> OutOfBounds (logLength l)
       (Just x) -> Ok $ entryTerm x
@@ -61,15 +61,15 @@ logAppendList index (x : xs) l@(RaftLog {..})
       (Just a) | entryTerm a == entryTerm x -> logAppendList (index + 1) xs l
       _ ->
         let (left, _) = S.splitAt (index - snapshotLen) entries
-         in l {entries = left >< (S.fromList (x : xs))}
+         in l {entries = left >< S.fromList (x : xs)}
 
 logSearchLeftMostTerm term l@(RaftLog {..})
   | term == snapshotTerm = Just $ snapshotLen - 1
-  | otherwise = (snapshotLen +) <$> (S.findIndexL ((== term) . entryTerm) entries)
+  | otherwise = (snapshotLen +) <$> S.findIndexL ((== term) . entryTerm) entries
 
 logSearchRightMost term l@(RaftLog {..}) =
-  case (snapshotLen +) <$> (S.findIndexR ((== term) . entryTerm) entries) of
-    (Just x) -> (Just x)
+  case (snapshotLen +) <$> S.findIndexR ((== term) . entryTerm) entries of
+    (Just x) -> Just x
     Nothing | term == snapshotTerm -> Just $ snapshotLen - 1
     _ -> Nothing
 
@@ -81,10 +81,10 @@ logEntriesBetween start end l@(RaftLog {..})
       let startIndex = start - snapshotLen
        in zip [start ..] (fmap entryCommand $ toList $ S.take (end - start) $ S.drop startIndex entries)
 
-logDropBefore :: Maybe Term -> Int -> RaftLog -> (Maybe RaftLog)
+logDropBefore :: Maybe Term -> Int -> RaftLog -> Maybe RaftLog
 logDropBefore lastTerm newSnapLen l@(RaftLog {..})
   | newSnapLen <= snapshotLen = Nothing
-  | newSnapLen > (logLength l) = fmap (\t -> RaftLog S.empty newSnapLen t) lastTerm
+  | newSnapLen > logLength l = fmap (RaftLog S.empty newSnapLen) lastTerm
   | otherwise =
       let (left, r) = S.splitAt (newSnapLen - snapshotLen) entries
        in case S.viewr left of

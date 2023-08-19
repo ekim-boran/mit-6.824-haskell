@@ -6,7 +6,7 @@ module Generic.Client where
 import Control.Monad.State
 import Generic.Api
 import Generic.Common
-import Raft.App (RaftContext)
+import Raft.Lib
 import Servant.Client (client)
 import Util
 
@@ -16,7 +16,7 @@ data KVClientState = KVClient
   }
 
 newtype KVClientT m a = KVClientT {unclient :: ReaderT KVClientState m a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader (KVClientState), MonadIO, MonadUnliftIO, MonadFail, MonadTrans, RaftContext, HasEnvironment)
+  deriving newtype (Functor, Applicative, Monad, MonadReader KVClientState, MonadIO, MonadUnliftIO, MonadFail, MonadTrans, RaftContext, HasEnvironment)
 
 class (HasEnvironment m) => KVClientContext m where
   call :: (ToJSON a, FromJSON b, Show b) => a -> m [b]
@@ -30,9 +30,9 @@ instance (HasEnvironment m, KVClientContext m) => KVClientContext (ReaderT r m) 
 instance (HasEnvironment m, KVClientContext m) => KVClientContext (StateT r m) where
   call = lift . call
 
-runKVClientT action state = runReaderT (unclient action) state
+runKVClientT action = runReaderT (unclient action)
 
-makeKVClientState servers = KVClient <$> (newIORef $ cycle servers) <*> (newIORef (MsgId 0))
+makeKVClientState servers = KVClient <$> newIORef (cycle servers) <*> newIORef (MsgId 0)
 
 call' op = do
   msg <- mkMsg op
@@ -40,13 +40,11 @@ call' op = do
   where
     go msg 0 = threadDelay 10000 >> go msg 10
     go msg iter = do
-      response <- withRef next head >>= \r -> sendRPC KVRPC r (client api msg)
+      response <- withRef next head >>= \r -> sendRPC r KVRPC (client api msg)
       case response >>= process msg of
         Nothing -> Util.modify next tail >> go msg (iter - 1)
         (Just x) -> return x
     process msg (Left ReplyWrongLeader) = Nothing
     process msg (Left ReplyNoKey) = Just []
     process msg (Right s) = Just s
-      where
-
     mkMsg op = KVArgs <$> me <*> Util.modify' lastMessageId (+ 1) <*> pure op

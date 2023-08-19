@@ -18,17 +18,17 @@ data ShardClientState = ShardClientState
   }
 
 newtype ShardClientT m a = ShardClientT {unShardClient :: ReaderT ShardClientState (KVClientT m) a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader (ShardClientState), MonadIO, MonadUnliftIO, MonadFail, HasEnvironment, KVClientContext)
+  deriving newtype (Functor, Applicative, Monad, MonadReader ShardClientState, MonadIO, MonadUnliftIO, MonadFail, HasEnvironment, KVClientContext)
 
 runShardClientT action state = runKVClientT $ runReaderT (unShardClient action) state
 
-makeShardClientState = ShardClientState <$> (newIORef (MsgId 0)) <*> (newIORef initialConfig)
+makeShardClientState = ShardClientState <$> newIORef (MsgId 0) <*> newIORef initialConfig
 
 mkMsg op = KVArgs <$> me <*> modify' lastMessageId (+ 1) <*> pure op
 
 updateConfig = do
   c <- query (-1)
-  modify lastConfig (\_ -> c) >> return c
+  modify lastConfig (const c) >> return c
 
 serverCall msg [] = return (Left ReplyWrongGroup)
 serverCall msg xs = call (return xs) msg xs
@@ -37,16 +37,16 @@ clientCall op = do
   msg <- mkMsg op
   servers <- withRef lastConfig (getServersByKey (key op))
   let retryAction = fmap (getServersByKey (key op)) updateConfig
-  response <- call (retryAction) (kv msg) servers
+  response <- call retryAction (kv msg) servers
   case response of
-    (Right x) -> (when ((fromIntegral (msgId msg)) `mod` 100 == 0) $ liftIO $ print $ show msg) >> return x --
-    (Left _) -> (when ((fromIntegral (msgId msg)) `mod` 100 == 0) $ liftIO $ print $ show msg) >> return []
+    (Right x) -> when (fromIntegral (msgId msg) `mod` 100 == 0) (liftIO $ print $ show msg) >> return x --
+    (Left _) -> when (fromIntegral (msgId msg) `mod` 100 == 0) (liftIO $ print $ show msg) >> return []
 
 call retryAction msg = go
   where
     go [] = threadDelay 10000 >> (retryAction >>= go)
     go (a : as) = do
-      response <- sendRPC ShardKVRPC a msg
+      response <- sendRPC a ShardKVRPC  msg
       case response of
         Nothing -> go as
         (Just x) -> process x

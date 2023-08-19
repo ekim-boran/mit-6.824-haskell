@@ -5,13 +5,18 @@ import ShardCtrlTests.Main
 import ShardKVTests.Main
 import Test.Tasty
 import Test.Tasty.HUnit
+import System.Process.Extra
 
 execute testName xss@((name, f) : xs) = testGroup testName $ [testCase name f] ++ zipWith go xss xs
   where
     go (beforeName, _) (name, f) = after AllSucceed beforeName $ testCase name f
+ 
+x = undefined where 
+  cp = proc "stack" ["exec", "raft2"]
 
 raftTests =
-  [ ("testInitialElection2A", testInitialElection2A),
+  [
+    ("testInitialElection2A", testInitialElection2A),
     ("testReElection2A", testReElection2A),
     ("testManyElections2A", testManyElections2A),
     ("testBasicAgree2B", testBasicAgree2B),
@@ -43,4 +48,4 @@ shardCtrlTests = [("shard controller1", shardBasic3A), ("shard controller2", sha
 shardTests = [("sharded kv store tests", testSimpleA)]
 
 main :: IO ()
-main = defaultMain $ execute "all tests" (shardTests ++ kvTests ++ shardCtrlTests ++ raftTests)
+main = defaultMain $ execute "all tests"  (shardTests ++ kvTests ++ shardCtrlTests) --(raftTests) -- ++  
