@@ -6,29 +6,31 @@ import Raft.Types.Raft
 import Raft.Util
 import Util
 
-beforeElection :: NodeId -> RaftState -> (RaftState, Maybe RequestVoteArgs)
-beforeElection me r@(RaftState {..})
-  | role /= Follower = (r, Nothing)
-  | otherwise = (vote Candidate (term + 1) (Just me) r, Just (RequestVoteArgs (term + 1) me (logLength raftLog) (logTermLast raftLog)))
- 
-startElection me = void . runMaybeT $ do
-  args <- MaybeT $ withRaftState (return . beforeElection me)
+startElection = void . runMaybeT $ do
+  raftId <- asksRaft raftId
+  args <- MaybeT $ withRaftState (return . beforeElection raftId)
   asyncs <- lift $ sendToAll (requestVoteRPC args)
-  MaybeT $ processAsyncs (1, 0) asyncs
+  MaybeT $ processVotes (1, 0) asyncs
   resetElectionTimer
   lift $ sendToAll sendAppendEntries
+  where
+    beforeElection :: NodeId -> RaftState -> (RaftState, Maybe RequestVoteArgs)
+    beforeElection me r@(RaftState {..})
+      | role /= Follower = (r, Nothing)
+      | otherwise = (vote Candidate (term + 1) (Just me) r, Just (RequestVoteArgs (term + 1) me (logLength raftLog) (logTermLast raftLog)))
 
 data ElectionResult = Cancelled | Won | Cont (Int, Int)
+
 data Vote = NegativeWrongTerm Term | NegativeNotCandidate | Negative | Positive
- 
-processAsyncs votes asyncs = flip finally (traverse_ cancel asyncs) $ do
+
+processVotes votes asyncs = flip finally (traverse_ Util.cancel asyncs) $ do
   (result, rest) <- waitAnyAsync asyncs
-  servers <- asks servers
-  acc' <- withRaftState (\s -> return $ calculateVote servers votes (processVote (join result) s) s)
+  servers <- asksRaft servers
+  acc' <- withRaftState (\s -> return $ electionResult servers votes (processVote (join result) s) s)
   case acc' of
     Cancelled -> return Nothing
     Won -> return (Just ())
-    (Cont votes) -> processAsyncs votes rest
+    (Cont votes) -> processVotes votes rest
   where
     processVote :: Maybe RequestVoteReply -> RaftState -> Vote
     processVote _ rs | role rs /= Candidate = NegativeNotCandidate
@@ -37,8 +39,8 @@ processAsyncs votes asyncs = flip finally (traverse_ cancel asyncs) $ do
       | replyTerm > term rs = NegativeWrongTerm replyTerm
       | not replyGranted = Negative
       | otherwise = Positive
-    calculateVote :: [NodeId] -> (Int, Int) -> Vote -> RaftState -> (RaftState, ElectionResult)
-    calculateVote servers (pos, neg) v rs =
+    electionResult :: [NodeId] -> (Int, Int) -> Vote -> RaftState -> (RaftState, ElectionResult)
+    electionResult servers (pos, neg) v rs =
       case v of
         NegativeWrongTerm term -> (vote Follower term Nothing rs, Cancelled)
         NegativeNotCandidate -> (rs, Cancelled)
@@ -48,7 +50,6 @@ processAsyncs votes asyncs = flip finally (traverse_ cancel asyncs) $ do
         Positive -> (rs, Cont (pos + 1, neg))
       where
         majority = (length servers `div` 2) + 1
-
 
 handleRequestVote (RequestVoteArgs {..}) = do
   response <- withRaftState (return . go)
@@ -63,5 +64,5 @@ handleRequestVote (RequestVoteArgs {..}) = do
       | otherwise = (r, response False)
       where
         voteOk = lastVote `elem` [Nothing, Just reqNodeId]
-        logOk = reqLastLogTerm > logTermLast raftLog || reqLastLogTerm == logTermLast raftLog && reqLogLength >= logLength raftLog
+        logOk = reqLastLogTerm > logTermLast raftLog || (reqLastLogTerm == logTermLast raftLog && reqLogLength >= logLength raftLog)
         response = RequestVoteReply term

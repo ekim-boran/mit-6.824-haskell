@@ -1,17 +1,11 @@
 module KV.Server where
 
-import Control.Applicative
-import Control.Concurrent.STM (retry)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Generic.Api
-import Generic.Client
-import Generic.Common
-import Generic.Server (KVServerState)
-import Network.Wai.Handler.Warp
-import Raft.Impl
-import Raft.Impl qualified as Impl
-import Util
+import KV.Generic.Api (KVState (..))
+import KV.Generic.Client (KVClient, call)
+import KV.Generic.Server (KVServerState)
+import Util (FromJSON, Generic, MonadIO, ToJSON)
 
 data KVOp
   = OpGet {key :: T.Text}
@@ -26,12 +20,17 @@ instance KVState KVData where
   type Reply KVData = [T.Text]
   getKV op = M.lookup (key op)
   putKV (OpPut key str) = M.insert key [str]
-  putKV (OpAppend key str) = M.alter (\x -> Just $ fromMaybe [str] (fmap (str :) x)) key
+  putKV (OpAppend key str) = M.alter (Just . maybe [str] (str :)) key
   putKV _ = id
   newState = M.empty
 
-get key = call (OpGet key)
+-- client
 
-append key value = call (OpAppend key value)
+get :: (MonadIO m, FromJSON a) => KVClient -> T.Text -> m [a]
+get client key = call client (OpGet key)
 
-put key value = call (OpPut key value)
+append :: (MonadIO m, FromJSON a) => KVClient -> T.Text -> T.Text -> m [a]
+append client key value = call client (OpAppend key value)
+
+put :: (MonadIO m, FromJSON a) => KVClient -> T.Text -> T.Text -> m [a]
+put client key value = call client (OpPut key value)

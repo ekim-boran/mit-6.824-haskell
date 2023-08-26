@@ -25,26 +25,24 @@ source-repository head
 
 library
   exposed-modules:
-      Generic.Api
-      Generic.Client
-      Generic.Common
-      Generic.Server
+      KV.Generic.Api
+      KV.Generic.Client
+      KV.Generic.Server
       KV.Server
+      KV.ShardCtrl.Server
+      KV.ShardCtrl.Types
       KVShard.Applier
       KVShard.Client
       KVShard.Server
       KVShard.Types
       Raft.API
       Raft.Election
-      Raft.Impl
       Raft.Lib
       Raft.Replication
       Raft.Types.Periodic
       Raft.Types.Raft
       Raft.Types.RaftLog
       Raft.Util
-      ShardCtrl.Server
-      ShardCtrl.Types
       Util
   other-modules:
       Paths_Raft
@@ -187,17 +185,14 @@ test-suite Raft-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      KVTests.Linearizable
-      KVTests.Main
-      KVTests.Test
-      KVTests.Util
-      RaftTests.Core
-      RaftTests.Main
-      RaftTests.Types
+      KV.Internal
+      KV.Tests
+      Raft.Internal
+      Raft.Tests
       ShardCtrlTests.Main
       ShardKVTests.Main
       Utilities.Network
-      Utilities.X
+      Utilities.Util
       Paths_Raft
   hs-source-dirs:
       test

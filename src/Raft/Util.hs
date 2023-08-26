@@ -5,6 +5,7 @@ module Raft.Util where
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import GHC.Base
+import GHC.Exts
 import Raft.Types.Raft
 import System.Directory.Extra (renameFile)
 import System.FilePath (takeDirectory)
@@ -12,9 +13,8 @@ import System.IO (hSetBinaryMode, openBinaryTempFile, openTempFile, openTempFile
 import Util
 
 withRaftState f = do
-  me <- me
-  state <- asks raftState
-  modifyMVar state $ go me
+  Raft {..} <- askRaft
+  modifyMVar raftState $ go raftId
   where
     go me old = do
       (new, r) <- f old
@@ -25,16 +25,13 @@ withRaftState f = do
         ptrEq !x !y = 1 == I# (reallyUnsafePtrEquality# x y)
         notEq = term old /= term new || lastVote old /= lastVote new || not (ptrEq (raftLog old) (raftLog new))
 
-readRaftState_ f = do
-  r@(Raft {..}) <- ask
-  modifyMVar raftState (\a -> (a,) <$> f a)
+readRaftState_ f = asksRaft raftState >>= \s -> modifyMVar s (\a -> (a,) <$> f a)
 
-resetElectionTimer = asks electionTask >>= resetPeriodic
+resetElectionTimer = asksRaft electionTask >>= resetPeriodic
 
 sendToAll x = do
-  servers <- asks servers
-  me <- me
-  let peers = filter (/= me) servers
+  Raft {..} <- askRaft
+  let peers = filter (/= raftId) servers
   traverse (async . x) peers
 
 readState (NodeId id) = liftIO go
@@ -42,6 +39,18 @@ readState (NodeId id) = liftIO go
     go :: forall a m. (FromJSON a) => IO (Maybe a)
     go = (decodeStrict @a <$> BS.readFile ("./data/" ++ show id ++ ".json")) `catch` (\(e :: SomeException) -> return Nothing)
 
-saveState (NodeId id) rs@(RaftState {..}) = liftIO $ atomicWrite ("./data/" ++ show id ++ ".json") (BS.toStrict $ encode (term, lastVote, raftLog, snap))
+saveState (NodeId id) rs@(RaftState {..}) = do
+  liftIO $ atomicWrite ("./data/" ++ show id ++ ".json") (BS.toStrict $ encode (term, lastVote, raftLog, snap))
   where
     atomicWrite path text = openBinaryTempFile (takeDirectory path) "atomic.write" >>= \(tmpPath, h) -> BS.hPut h text >> hClose h >> renameFile tmpPath path
+
+class (MonadIO m) => RaftContext m where
+  askRaft :: m Raft
+
+instance (MonadIO m) => RaftContext (ReaderT Raft m) where
+  askRaft = ask
+
+instance (RaftContext m) => RaftContext (MaybeT m) where
+  askRaft = lift askRaft
+
+asksRaft f = f <$> askRaft

@@ -1,14 +1,15 @@
 module KVShard.Types where
 
-import Data.Char
 import Data.Either.Extra (maybeToEither)
 import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Generic.Common
+import KV.Generic.Api (KVArgs (..), KVErr (..), KVReply (..), MsgId (..))
+import KV.Generic.Client (KVClient)
+import KV.ShardCtrl.Types
+import Raft.Types.Raft (Raft)
 import Servant
 import Servant.Client (client)
-import ShardCtrl.Types
 import Util
 
 data KVOp
@@ -16,13 +17,6 @@ data KVOp
   | OpPut {key :: T.Text, value :: T.Text}
   | OpAppend {key :: T.Text, value :: T.Text}
   deriving (Show, Generic, FromJSON, ToJSON)
-
-x :: Maybe KVOp
-x = decode $ encode $ OpPut "3" "3"
-
--- >>> show x
--- "Just (OpPut {key = \"3\", value = \"3\"})"
---
 
 type ShardKVAPI =
   "kv" :> ReqBody '[JSON] (KVArgs KVOp) :> Get '[JSON] (KVReply [T.Text])
@@ -52,7 +46,7 @@ data ShardKVOp
 shardKVApi :: Proxy ShardKVAPI
 shardKVApi = Servant.Proxy @ShardKVAPI
 
-kv :<|> getShards :<|> deleteShards = client shardKVApi
+kv :<|> getShards :<|> deleteShards = Servant.Client.client shardKVApi
 
 data ConfigState = Active Config | InTransition Config Config deriving (Eq, Show, Generic, ToJSON, FromJSON)
 
@@ -61,19 +55,20 @@ data ShardServerState = ShardServerState
     items :: TVar (M.Map ShardId (ConfigId, M.Map T.Text [T.Text])),
     lastProcessed :: TVar (M.Map NodeId (TVar MsgId)),
     lastAppliedLen :: TVar Int, -- to decide when to snapshot
-    cancelAction :: IORef (IO ()),
-    state :: TVar ConfigState
+    state :: TVar ConfigState,
+    raft :: Raft,
+    client :: KVClient
   }
 
 emptyItems = M.fromList [(sid, (0, M.empty)) | sid <- [0 .. 9]]
 
-makeShardServerState gid = do
+makeShardServerState :: MonadIO m => GroupId -> Raft -> KVClient -> m ShardServerState
+makeShardServerState gid raft client = do
   items <- newTVarIO emptyItems
   lp <- newTVarIO M.empty
   la <- newTVarIO 0
-  c <- newIORef (return ())
   state <- newTVarIO (Active initialConfig)
-  return $ ShardServerState gid items lp la c state
+  return $ ShardServerState gid items lp la state raft client
 
 oldShards s@(ShardServerState {..}) newConfig = do
   let shards = getShardsByGroup gid newConfig

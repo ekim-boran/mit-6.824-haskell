@@ -1,7 +1,7 @@
 module Raft.Types.Periodic where
 
-import Data.Fixed
-import Data.Time
+import Data.Fixed (Pico)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime, secondsToNominalDiffTime)
 import Data.Time.Clock.System (SystemTime, getSystemTime)
 import Util
 

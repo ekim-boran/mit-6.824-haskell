@@ -1,32 +1,17 @@
 {-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE MagicHash #-}
 
 module Raft.Types.Raft (module Raft.Types.Raft, module Raft.Types.RaftLog, module Raft.Types.Periodic) where
 
 import Data.Map qualified as M
 import Data.Text qualified as T
-import GHC.Base
 import Raft.Types.Periodic
 import Raft.Types.RaftLog
 import Servant.Client (ClientM)
 import Util
 
-data ApplyCommand = ApplyC
-  { applyCommandIndex :: Int,
-    applyCommand :: RaftCommand
-  }
-  deriving (Show, Generic, FromJSON, ToJSON, Eq, Ord)
-
-data ApplySnapshot = ApplyS
-  { applysnapshotBytes :: T.Text,
-    applysnapshotTerm :: Term,
-    applysnapshotLen :: Int
-  }
-  deriving (Show, Generic, FromJSON, ToJSON, Eq, Ord)
-
 data ApplyMsg
-  = ApplyCommand ApplyCommand
-  | ApplySnapshot ApplySnapshot
+  = ApplyCommand (Int, RaftCommand)
+  | ApplySnapshot (T.Text, Term, Int)
   deriving (Show, Generic, FromJSON, ToJSON, Eq, Ord)
 
 data Raft = Raft
@@ -36,8 +21,9 @@ data Raft = Raft
     applyCh :: TChan ApplyMsg,
     committedLen :: TVar Int, -- index of highest log entry applied to state machine (initialized to 0, increases monotonically)
     appliedLen :: TVar Int, -- index of highest log entry known to be committed (initialized to 0, increases monotonically)
-    cancelTask :: IORef (IO ()),
-    raftState :: MVar RaftState
+    raftState :: MVar RaftState,
+    raftId :: NodeId,
+    sendRPC :: forall a. NodeId -> ClientM a -> IO (Maybe a)
   }
 
 data Role = Follower | Leader | Candidate deriving (Show, Eq)
@@ -52,18 +38,18 @@ data RaftState = RaftState
     snap :: T.Text
   }
 
+emptyState :: [NodeId] -> RaftState
 emptyState servers = RaftState Follower (Term 0) Nothing (makeMap servers 0) (makeMap servers 0) makeLog T.empty
 
 vote :: Role -> Term -> Maybe NodeId -> RaftState -> RaftState
 vote newRole newTerm lastVote r = r {role = newRole, lastVote = lastVote, term = newTerm}
 
-makeRaft :: MonadIO m => [NodeId] -> m Raft
-makeRaft servers = do
+makeRaft :: MonadIO m => NodeId -> [NodeId] -> (forall a. NodeId -> ClientM a -> IO (Maybe a)) -> m Raft
+makeRaft me servers rpc = do
   commitLen <- newTVarIO 0
   appliedLen <- newTVarIO 0
   state <- newMVar (emptyState servers)
   electionTask <- makePeriodic 0.2 True
   heartbeatTask <- makePeriodic 0.1 False
-  cancelTask <- newIORef (return ())
   chan <- newTChanIO
-  return $ Raft servers electionTask heartbeatTask chan commitLen appliedLen cancelTask state
+  return $ Raft servers electionTask heartbeatTask chan commitLen appliedLen state me rpc

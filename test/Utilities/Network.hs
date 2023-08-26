@@ -1,29 +1,17 @@
 module Utilities.Network where
 
 import Control.Applicative (empty)
+import Data.Either.Extra (eitherToMaybe)
 import Data.IORef.Extra (atomicModifyIORef_)
 import Data.IntSet qualified as IS
 import Data.Set qualified as S
 import Network.HTTP.Client hiding (port)
 import Servant.Client
 import Util
-
-type TestEnvironment = (NodeId, TestNetwork)
-
-newtype TestEnvironmentT m a = TestEnvironmentT {unTest :: ReaderT (NodeId, TestNetwork) m a}
-  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, MonadReader (NodeId, TestNetwork), MonadFail)
-
-runNetwork a = runReaderT (unTest a)
-
-instance (Monad m, MonadIO m) => HasEnvironment (TestEnvironmentT m) where
-  sendRPC peer rpcType f = do
-    (me, network) <- ask
-    liftIO $ networkRPC me peer rpcType f network
-  me = asks fst
+import Utilities.Util
 
 data TestNetwork = TestNetwork
-  { manager :: Manager,
-    disNodes :: IORef (S.Set NodeId),
+  { disNodes :: IORef (S.Set NodeId),
     config :: IORef NetworkConfiguration,
     partitions :: IORef [IS.IntSet],
     rpcCount :: IORef Int
@@ -35,8 +23,8 @@ data NetworkConfiguration = NetworkConfiguration
     longReordering :: Bool
   }
 
-networkRPC :: NodeId -> NodeId -> RPCType -> ClientM a -> TestNetwork -> IO (Maybe a)
-networkRPC from to rpcType f net@(TestNetwork {..}) = do
+networkRPC :: NodeId -> NodeId -> RPCType -> ClientM a -> Manager -> TestNetwork -> IO (Maybe a)
+networkRPC from to rpcType f manager net@(TestNetwork {..}) = do
   config@(NetworkConfiguration {..}) <- atomicModifyIORef config (\n -> (n, n))
   liftIO $ atomicModifyIORef_ rpcCount (+ 1)
   d <- checkConnection from to net
@@ -45,7 +33,7 @@ networkRPC from to rpcType f net@(TestNetwork {..}) = do
     else do
       r <- runMaybeT $ do
         unless reliable $ randomDelay 27 >> withProb2 10 empty -- short delay &&  drop request
-        r <- MaybeT $ liftIO $ toMaybe <$> runClientM f (mkClientEnv manager (BaseUrl Http "localhost" (nodeId to + port rpcType) ""))
+        r <- MaybeT $ liftIO $ eitherToMaybe <$> runClientM f (mkClientEnv manager (BaseUrl Http "localhost" (nodeId to + port rpcType) ""))
         unless reliable $ withProb2 10 empty --  drop response
         return r
       case r of
@@ -53,13 +41,13 @@ networkRPC from to rpcType f net@(TestNetwork {..}) = do
         (Just x) -> when longReordering $ withProb2 66 (randomDelay 1000)
       return r
 
+makeNetwork :: MonadIO m => Bool -> m TestNetwork
 makeNetwork reliable = do
-  manager <- newManager defaultManagerSettings {managerConnCount = 100}
   set <- newIORef S.empty
   count <- newIORef 0
   partitions <- newIORef []
   config <- newIORef $ NetworkConfiguration reliable False False
-  return $ TestNetwork manager set config partitions count
+  return $ TestNetwork set config partitions count
 
 checkConnection from to net@(TestNetwork {..}) = do
   disconnectedNodes <- atomicModifyIORef disNodes (\n -> (n, n))
@@ -84,3 +72,13 @@ changeLongReordering b n = atomicModifyIORef' (config n) (\c -> (c {longReorderi
 partitionNetwork xs n = atomicModifyIORef' (partitions n) (const (fmap (IS.fromList . fmap fromIntegral) xs, ()))
 
 removePartitions n = atomicModifyIORef' (partitions n) (const ([], ()))
+
+-- sudo iptables -A OUTPUT -p tcp --destination-port %d -j DROP
+-- sudo iptables -A INPUT -p tcp --destination-port %d -j DROP
+
+-- sudo iptables -D OUTPUT -p tcp --destination-port %d -j DROP
+-- sudo iptables -D INPUT -p tcp --destination-port %d -j DROP
+
+-- sudo tc qdisc add dev %s root netem delay %dms %dms distribution normal
+-- sudo tc qdisc change dev %s root netem delay %dms %dms distribution normal
+-- sudo tc qdisc del dev %s root netem

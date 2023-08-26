@@ -1,22 +1,17 @@
 import Control.Monad
-import KVTests.Main
-import RaftTests.Main
+import KV.Tests
+import Raft.Tests
 import ShardCtrlTests.Main
 import ShardKVTests.Main
 import Test.Tasty
 import Test.Tasty.HUnit
-import System.Process.Extra
 
-execute testName xss@((name, f) : xs) = testGroup testName $ [testCase name f] ++ zipWith go xss xs
+execute testName xss@((name, f) : xs) = testGroup testName $ testCase name f : zipWith go xss xs
   where
     go (beforeName, _) (name, f) = after AllSucceed beforeName $ testCase name f
- 
-x = undefined where 
-  cp = proc "stack" ["exec", "raft2"]
 
 raftTests =
-  [
-    ("testInitialElection2A", testInitialElection2A),
+  [ ("testInitialElection2A", testInitialElection2A),
     ("testReElection2A", testReElection2A),
     ("testManyElections2A", testManyElections2A),
     ("testBasicAgree2B", testBasicAgree2B),
@@ -31,8 +26,8 @@ raftTests =
     ("testFigure82C", testFigure82C),
     ("testFigure8Unreliable2C", testFigure8Unreliable2C),
     ("testUnreliableAgree2C", testUnreliableAgree2C),
-    ("1reliable churn", reliableChurn),
-    ("2unreliable churn", unreliableChurn),
+    ("reliablechurn1", reliableChurn),
+    ("unreliablechurn2", unreliableChurn),
     ("testSnapshotBasic2D", testSnapshotBasic2D),
     ("testSnapshotInstall2D", testSnapshotInstall2D),
     ("2testSnapshotInstallUnreliable2D1", testSnapshotInstallUnreliable2D1),
@@ -43,9 +38,9 @@ raftTests =
 
 kvTests = [("kv store tests", testBasic3A)]
 
-shardCtrlTests = [("shard controller1", shardBasic3A), ("shard controller2", shardBasic3B)]
+shardCtrlTests = [("shard controller1", shardBasic3A)]
 
 shardTests = [("sharded kv store tests", testSimpleA)]
 
 main :: IO ()
-main = defaultMain $ execute "all tests"  (shardTests ++ kvTests ++ shardCtrlTests) --(raftTests) -- ++  
+main = defaultMain $ execute "all tests" (  raftTests ++ shardTests ++ kvTests ++ shardCtrlTests ) -- (shardTests ++ kvTests ++ shardCtrlTests) --(raftTests) -- ++

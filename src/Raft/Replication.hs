@@ -5,6 +5,7 @@ import Raft.API
 import Raft.Types.Raft
 import Raft.Util
 import Util
+import qualified Data.Text as T
 
 withStateLeader_ f = MaybeT $ readRaftState_ (\s -> if role s /= Leader then return Nothing else f s)
 
@@ -18,8 +19,9 @@ beforeAppendEntries leaderCommit nodeid r@(RaftState {..}) = do
     Ok lastTerm -> Just $ Right $ AppendEntriesArgs term index lastTerm (logEntriesAfter index raftLog) leaderCommit
     _ -> Nothing
 
+sendAppendEntries :: (RaftContext f, MonadUnliftIO f) => NodeId -> f ()
 sendAppendEntries nodeId = void . runMaybeT $ do
-  leaderCommit <- asks committedLen >>= readTVarIO
+  leaderCommit <- asksRaft committedLen >>= readTVarIO
   args <- withStateLeader_ (return . beforeAppendEntries leaderCommit nodeId)
   case args of
     Left args -> do
@@ -33,13 +35,13 @@ sendAppendEntries nodeId = void . runMaybeT $ do
         else lift $ sendAppendEntries nodeId
 
 updateCommited newValue = do
-  tvar <- asks committedLen
+  tvar <- asksRaft committedLen
   atomically $ do
     x <- readTVar tvar
     when (x < newValue) $ writeTVar tvar newValue
 
 newCommited rs@(RaftState {..}) = do
-  index <- asks ((`div` 2) . length . servers)
+  index <- asksRaft ((`div` 2) . length . servers)
   let middle = go (sort (M.elems ackedLen) !! index)
   return middle
   where
@@ -67,6 +69,7 @@ processSnapshotReply index nodeId reply@InstallSnapshotReply {..} rs@(RaftState 
 
 ----
 
+handleAppendEntry :: (RaftContext m, MonadUnliftIO m) => AppendEntriesArgs -> m AppendEntriesReply
 handleAppendEntry args@AppendEntriesArgs {..} = do
   reply <- withRaftState (pure . go)
   when (replySuccess reply /= Fail) resetElectionTimer
@@ -88,12 +91,14 @@ handleAppendEntry args@AppendEntriesArgs {..} = do
         let newlog = logAppendList reqStartIndex reqEntries raftLog
         (r {raftLog = newlog}, AppendEntriesReply term Success) -- ok
 
+handleSnapshot :: (RaftContext m, MonadUnliftIO m) => InstallSnapshotArgs -> m InstallSnapshotReply
 handleSnapshot args@InstallSnapshotArgs {..} = do
-  (b, term) <- withRaftState go
-  when b $ asks applyCh >>= (\c -> atomically $ writeTChan c (ApplySnapshot (ApplyS reqSnapshot reqSnapshotTerm reqSnapshotLen)))
+  when (reqSnapshot == T.empty) $ liftIO $ print "boran"
+  (b, term) <- withRaftState (return . go)
+  when b $ resetElectionTimer >> asksRaft applyCh >>= (\c -> atomically $ writeTChan c (ApplySnapshot (reqSnapshot, reqSnapshotTerm, reqSnapshotLen)))
   return $ InstallSnapshotReply term
   where
     go r@(RaftState {..})
-      | reqTerm < term = return (r, (False, term))
-      | reqTerm > term = resetElectionTimer >> return (vote Follower reqTerm Nothing r, (True, term))
-      | otherwise = return (r, (True, term))
+      | reqTerm < term = (r, (False, term))
+      | reqTerm > term = (vote Follower reqTerm Nothing r, (True, term))
+      | otherwise = (r, (True, term))

@@ -1,4 +1,3 @@
-{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 
 module Raft.API where
@@ -6,8 +5,9 @@ module Raft.API where
 import Data.Map qualified as M
 import Data.Text qualified as T
 import Raft.Types.Raft
+import Raft.Util (asksRaft, RaftContext (askRaft))
 import Servant
-import Servant.Client
+import Servant.Client ( client )
 import Util
 
 data RequestVoteArgs = RequestVoteArgs
@@ -64,10 +64,14 @@ raftApi = Servant.Proxy @RaftAPI
 
 requestVote :<|> appendEntries :<|> installSnapshot = client raftApi
 
-requestVoteRPC msg peer = sendRPC peer RaftRPC (requestVote msg)
+requestVoteRPC msg peer = do
+  Raft {..} <- askRaft
+  liftIO $ sendRPC peer (requestVote msg)
 
-appendEntriesRPC msg peer = sendRPC peer RaftRPC (appendEntries msg)
+appendEntriesRPC msg peer = do
+  Raft {..} <- askRaft
+  liftIO $ sendRPC peer (appendEntries msg)
 
-installSnapshotRPC msg peer = sendRPC peer RaftRPC (installSnapshot msg)
-
- 
+installSnapshotRPC msg peer = do
+  Raft {..} <- askRaft
+  liftIO $ sendRPC peer (installSnapshot msg)

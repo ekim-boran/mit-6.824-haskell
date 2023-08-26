@@ -1,11 +1,9 @@
 module Raft.Types.RaftLog where
 
-import Data.ByteString qualified as BS
-import Data.Data
-import Data.Sequence hiding (drop, zip)
+import Data.Sequence (ViewR (EmptyR, (:>)), (><), (|>))
 import Data.Sequence qualified as S
 import Data.Text qualified as T
-import Util
+import Util (FromJSON (..), Generic, ToJSON (..), toList)
 
 type RaftCommand = T.Text
 
@@ -17,7 +15,13 @@ data Entry = Entry
   { entryTerm :: Term,
     entryCommand :: T.Text
   }
-  deriving (Show, Generic, FromJSON, ToJSON)
+  deriving (Show, Generic)
+
+instance FromJSON Entry where
+  parseJSON v = uncurry Entry <$> parseJSON v
+
+instance ToJSON Entry where
+  toJSON (Entry term command) = toJSON (term, command)
 
 data RaftLog = RaftLog
   { entries :: S.Seq Entry,
@@ -79,14 +83,25 @@ logEntriesBetween start end l@(RaftLog {..})
   | start < snapshotLen = []
   | otherwise =
       let startIndex = start - snapshotLen
-       in zip [start ..] (fmap entryCommand $ toList $ S.take (end - start) $ S.drop startIndex entries)
+       in zip [start ..] (fmap entryCommand $ toList $ S.take (end - start) $ S.drop startIndex entries) --
 
-logDropBefore :: Maybe Term -> Int -> RaftLog -> Maybe RaftLog
+logDropBefore1 :: Int -> RaftLog -> Maybe RaftLog
+logDropBefore1 newSnapLen l@(RaftLog {..})
+  | newSnapLen <= snapshotLen = Nothing
+  | newSnapLen > logLength l = Nothing
+  | otherwise = case S.viewr left of
+      (_ :> a) -> Just $ RaftLog {snapshotLen = newSnapLen, snapshotTerm = entryTerm a, entries = right}
+      EmptyR -> Nothing
+  where
+    (left, right) = S.splitAt (newSnapLen - snapshotLen) entries
+
+logDropBefore :: Term -> Int -> RaftLog -> Maybe RaftLog
 logDropBefore lastTerm newSnapLen l@(RaftLog {..})
   | newSnapLen <= snapshotLen = Nothing
-  | newSnapLen > logLength l = fmap (RaftLog S.empty newSnapLen) lastTerm
-  | otherwise =
-      let (left, r) = S.splitAt (newSnapLen - snapshotLen) entries
-       in case S.viewr left of
-            (_ :> a) -> Just $ RaftLog {snapshotLen = newSnapLen, snapshotTerm = entryTerm a, entries = r}
-            EmptyR -> error "cannot happen"
+  | newSnapLen > logLength l = Just (RaftLog S.empty newSnapLen lastTerm)
+  | otherwise = case S.viewr left of
+      (_ :> a) | lastTerm == entryTerm a -> Just $ RaftLog {snapshotLen = newSnapLen, snapshotTerm = entryTerm a, entries = right}
+      (_ :> a) | lastTerm /= entryTerm a -> Just $ RaftLog {snapshotLen = newSnapLen, snapshotTerm = lastTerm, entries = S.empty}
+      EmptyR -> Nothing
+  where
+    (left, right) = S.splitAt (newSnapLen - snapshotLen) entries

@@ -2,44 +2,28 @@
 
 module KVShard.Server where
 
-import Control.Applicative
 import Control.Concurrent.STM (retry)
-import Data.Coerce
-import Data.Either.Extra (maybeToEither)
+import Data.Coerce (coerce)
+import Data.Either.Extra (eitherToMaybe, maybeToEither)
 import Data.Map.Strict qualified as M
-import Data.Set qualified as S
-import Data.Text qualified as T
-import Generic.Client (KVClientContext, KVClientState, KVClientT, runKVClientT)
-import Generic.Common
-import KVShard.Applier
-import KVShard.Client
+import KV.Generic.Api
+import KV.Generic.Client (KVClient, call')
+import KV.ShardCtrl.Server (query)
+import KV.ShardCtrl.Types
+import KVShard.Applier (applier, checkShard)
 import KVShard.Types
-import Raft.Lib
-import Raft.Types.Raft
+import Raft.Lib (commit, getState, start)
+import Raft.Types.Raft (Raft (raftId))
+import Raft.Util (RaftContext (askRaft), asksRaft)
 import Servant
-import ShardCtrl.Server (query)
-import ShardCtrl.Types
 import Util
 
-newtype ShardServerT m a = ShardServerT {unServer :: ReaderT ShardServerState (KVClientT (RaftT m)) a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader ShardServerState, MonadIO, MonadUnliftIO, RaftContext, HasEnvironment, KVClientContext)
-
-runShardServerT action state = runKVClientT (runReaderT (unServer action) state)
-
-stop = do
-  s@ShardServerState {..} <- ask
-  stopRaft
-  readIORef cancelAction >>= liftIO
-  atomically $ writeTVar items emptyItems >> writeTVar lastAppliedLen 0 >> writeTVar lastProcessed M.empty >> writeTVar state (Active initialConfig)
-  return ()
-
 start = do
-  me' <- me
-  tasks <- async $ update `race` applier `race` apiServer me' ShardKVRPC shardKVApi (kvserver :<|> getShardsServer :<|> deleteShardsServer) `race` emptyLoop
-  startRaft
-  modify cancelAction (\_ -> Util.cancel tasks)
+  s@ShardServerState {..} <- ask
+  update `race_` applier `race_` server (raftId raft) `race_` emptyLoop `race_` Raft.Lib.start
+  where
+    server id = apiServer id KVRPC shardKVApi (kvserver :<|> getShardsServer :<|> deleteShardsServer)
 
-emptyLoop :: (MonadReader ShardServerState m, RaftContext m) => m b
 emptyLoop = do
   gid <- asks gid
   forever $ do
@@ -50,24 +34,23 @@ leaderTerm = ExceptT $ do
   (term, isLeader) <- getState
   if isLeader then return $ Right term else return (Left ReplyWrongLeader)
 
+update :: (MonadReader ShardServerState f, RaftContext f, MonadUnliftIO f) => f ()
 update = void . forever . runExceptT $ do
   threadDelay 50000
-  server@(ShardServerState {..}) <- ask
+  server@(ShardServerState {state, gid}) <- ask
   leaderTerm
   state <- readTVarIO state
   case state of
     Active active -> do
-      new <- lift $ query (configId active + 1)
+      new <- asks client >>= \c -> query c (configId active + 1)
       when (configId active /= configId new) $ serverCommit (KVArgs (coerce gid) (coerce (configId new)) (OpNewConfig new))
     InTransition old new -> lift $ do
       shardIds <- atomically $ oldShards server new
       flip mapConcurrently_ (getServersByShardIds shardIds old) $
         \((targetGid, servers), shards) -> runExceptT $ do
-          response <- ExceptT $ serverCall (getShards (GetShardRequest (coerce (configId new)) shards)) servers
-          -- liftIO $ print $ "1me :" ++ show gid ++ " target: " ++ show targetGid ++ " shards: " ++ show shards ++ " configs: old " ++ show (configId old) ++ " new" ++ show (configId new)
+          response <- ExceptT $ asks client >>= \c -> fst <$> call' c (getShards (GetShardRequest (coerce (configId new)) shards)) (cycle servers)
           serverCommit (KVArgs (coerce gid * 7 + coerce targetGid * 11) (coerce (configId new)) (OpGetShards response)) -- fix it multiplied to avoid duplicate detection
-          -- liftIO $ print $ "2me :" ++ show gid ++  " target: " ++ show targetGid ++ " shards: " ++ show shards ++ " configs: old " ++ show (configId old) ++ " new" ++ show (configId new) ++ " response" ++ show a
-          lift $ async $ serverCall (deleteShards (DeleteShardsRequest (coerce (gid)) (coerce (configId old)) shards)) servers
+          lift $ async $ asks client >>= \c -> fst <$> call' c (deleteShards (DeleteShardsRequest (coerce gid) (coerce (configId old)) shards)) (cycle servers)
 
 kvserver args@KVArgs {..} = do
   s@(ShardServerState {..}) <- ask

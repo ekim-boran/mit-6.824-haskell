@@ -1,62 +1,55 @@
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Redundant bracket" #-}
 
 module KVShard.Client where
 
-import Data.Char (ord)
-import Data.Map qualified as M
-import Data.Text qualified as T
-import Generic.Client (KVClientContext, KVClientT, runKVClientT)
-import Generic.Common
-import KVShard.Types
-import ShardCtrl.Server (query)
-import ShardCtrl.Types
+import KV.Generic.Api (KVArgs (..), KVErr (..), MsgId (..))
+import KV.Generic.Client (KVClient)
+import KV.ShardCtrl.Server (query)
+import KV.ShardCtrl.Types (Config, getServersByKey, initialConfig)
+import KVShard.Types (KVOp (OpAppend, OpGet, OpPut, key), kv)
+import Servant.Client (ClientM)
 import Util
 
-data ShardClientState = ShardClientState
-  { lastMessageId :: IORef MsgId,
-    lastConfig :: IORef Config
+data ShardClient = ShardClient
+  { clientId :: NodeId,
+    sendRPC :: forall a. NodeId -> ClientM a -> IO (Maybe a),
+    lastMessageId :: IORef MsgId,
+    lastConfig :: IORef Config,
+    shardCtrlClient :: KVClient
   }
 
-newtype ShardClientT m a = ShardClientT {unShardClient :: ReaderT ShardClientState (KVClientT m) a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader ShardClientState, MonadIO, MonadUnliftIO, MonadFail, HasEnvironment, KVClientContext)
+makeShardClient :: MonadIO f => NodeId -> (forall a. NodeId -> ClientM a -> IO (Maybe a)) -> KVClient -> f ShardClient
+makeShardClient clientId sendRPC s = ShardClient clientId sendRPC <$> newIORef (MsgId 0) <*> newIORef initialConfig <*> pure s
 
-runShardClientT action state = runKVClientT $ runReaderT (unShardClient action) state
+updateConfig c = do
+  config <- query (shardCtrlClient c) (-1)
+  atomicModifyIORef (lastConfig c) (const (config, config))
 
-makeShardClientState = ShardClientState <$> newIORef (MsgId 0) <*> newIORef initialConfig
-
-mkMsg op = KVArgs <$> me <*> modify' lastMessageId (+ 1) <*> pure op
-
-updateConfig = do
-  c <- query (-1)
-  modify lastConfig (const c) >> return c
-
-serverCall msg [] = return (Left ReplyWrongGroup)
-serverCall msg xs = call (return xs) msg xs
-
-clientCall op = do
-  msg <- mkMsg op
-  servers <- withRef lastConfig (getServersByKey (key op))
-  let retryAction = fmap (getServersByKey (key op)) updateConfig
-  response <- call retryAction (kv msg) servers
+call c@ShardClient {..} op = do
+  msg <- KVArgs clientId <$> atomicModifyIORef lastMessageId (\a -> (a + 1, a)) <*> pure op
+  servers <- getServersByKey (key op) <$> readIORef lastConfig
+  let retryAction = fmap (getServersByKey (key op)) (updateConfig c)
+  response <- call' c retryAction (kv msg) servers
   case response of
-    (Right x) -> when (fromIntegral (msgId msg) `mod` 100 == 0) (liftIO $ print $ show msg) >> return x --
-    (Left _) -> when (fromIntegral (msgId msg) `mod` 100 == 0) (liftIO $ print $ show msg) >> return []
+    (Right x) -> return x --
+    (Left _) -> return []
 
-call retryAction msg = go
+call' c@(ShardClient {..}) retryAction msg = go
   where
     go [] = threadDelay 10000 >> (retryAction >>= go)
-    go (a : as) = do
-      response <- sendRPC a ShardKVRPC  msg
+    go (id : ids) = do
+      response <- liftIO $ sendRPC id msg
       case response of
-        Nothing -> go as
-        (Just x) -> process x
-          where
-            process (Left ReplyWrongLeader) = go as
-            process (Left ReplyWrongGroup) = go [] -- updateConfig
-            process x = return x
+        Nothing -> go ids
+        (Just (Left ReplyWrongLeader)) -> go ids
+        (Just (Left ReplyWrongGroup)) -> go []
+        (Just (x)) -> return x
 
-get key = clientCall (OpGet key)
+get c key = call c (OpGet key)
 
-append key value = clientCall (OpAppend key value)
+append c key value = call c (OpAppend key value)
 
-put key value = clientCall (OpPut key value)
+put c key value = call c (OpPut key value)
